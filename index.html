@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <title>Tag Together</title>
+  <style>
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#171528;font-family:system-ui,sans-serif;color:#fff}
+    body{touch-action:none}
+    #game{display:block;width:100vw;height:100vh;image-rendering:pixelated}
+    .panel{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#171528e8;z-index:10}
+    .card{width:min(92vw,430px);padding:28px;border:4px solid #fff;border-radius:18px;background:#282342;box-shadow:0 10px 0 #0d0b18;text-align:center}
+    h1{margin:0 0 8px;font-size:34px;letter-spacing:1px}
+    p{opacity:.85;line-height:1.45}
+    input,button{width:100%;height:50px;margin-top:10px;border:0;border-radius:12px;font:700 16px system-ui}
+    input{padding:0 14px;background:#fff;color:#222;text-transform:uppercase;text-align:center;letter-spacing:3px}
+    button{background:#7ee787;color:#102016;cursor:pointer}
+    button.secondary{background:#8ab4ff}
+    #status{min-height:24px;margin-top:12px;color:#ffd866}
+    #hud{position:fixed;top:max(12px,env(safe-area-inset-top));left:0;right:0;display:none;justify-content:center;pointer-events:none;z-index:5}
+    .hudbox{background:#201c37dd;border:2px solid #fff;border-radius:12px;padding:8px 14px;font-weight:800;text-align:center}
+    #roomLabel{font-size:12px;opacity:.7}
+    #role{font-size:16px}
+    #round{font-size:13px;opacity:.9}
+    #toast{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) scale(.8);opacity:0;z-index:7;pointer-events:none;font-size:32px;font-weight:1000;text-shadow:4px 4px 0 #171528;transition:.16s}
+    #toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+    #joystick{display:none;position:fixed;left:22px;bottom:max(22px,env(safe-area-inset-bottom));width:132px;height:132px;border-radius:50%;background:#ffffff22;border:3px solid #ffffff55;z-index:6}
+    #stick{position:absolute;width:58px;height:58px;border-radius:50%;background:#ffffff88;border:3px solid #fff;left:34px;top:34px}
+    #hint{font-size:12px;opacity:.65;margin-top:8px}
+    @media (pointer:coarse){#joystick{display:block}}
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="menu" class="panel">
+  <div class="card">
+    <h1>💗 TAG TOGETHER</h1>
+    <p>Chase each other around a tiny pixel arena. Get close enough to tag. First to <b>5 tags</b> wins.</p>
+    <button id="create">Create Room</button>
+    <input id="code" maxlength="8" placeholder="ROOM CODE">
+    <button id="join" class="secondary">Join Room</button>
+    <div id="status"></div>
+    <div id="hint">On mobile: drag the joystick. Desktop: WASD / arrow keys.</div>
+  </div>
+</div>
+
+<div id="hud">
+  <div class="hudbox">
+    <div id="roomLabel"></div>
+    <div id="role"></div>
+    <div id="round"></div>
+  </div>
+</div>
+<div id="toast"></div>
+<div id="joystick"><div id="stick"></div></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+ctx.imageSmoothingEnabled=false;
+const menu=document.getElementById('menu'), statusEl=document.getElementById('status');
+const hud=document.getElementById('hud'), roleEl=document.getElementById('role'), roundEl=document.getElementById('round');
+const roomLabel=document.getElementById('roomLabel'), toast=document.getElementById('toast');
+const socket=io();
+let me=null, room=null, state=null, last=performance.now(), keys={};
+let joy={x:0,y:0}, joyActive=false;
+
+function resize(){canvas.width=innerWidth;canvas.height=innerHeight}
+addEventListener('resize',resize); resize();
+
+function setStatus(s){statusEl.textContent=s}
+function showToast(t){
+  toast.textContent=t; toast.classList.add('show');
+  setTimeout(()=>toast.classList.remove('show'),420);
+}
+function start(data){
+  me=data.playerId; room=data.room; state=data.state;
+  menu.style.display='none'; hud.style.display='flex';
+  roomLabel.textContent='ROOM '+room;
+}
+document.getElementById('create').onclick=()=>{setStatus('Creating room…');socket.emit('createRoom')};
+document.getElementById('join').onclick=()=>{
+  const c=document.getElementById('code').value.trim().toUpperCase();
+  if(!c)return setStatus('Enter a room code.');
+  setStatus('Joining…');socket.emit('joinRoom',c);
+};
+socket.on('roomCreated',start);
+socket.on('joined',start);
+socket.on('errorMessage',setStatus);
+socket.on('state',s=>state=s);
+socket.on('tag',d=>{
+  showToast('✨ TAG!');
+  if(navigator.vibrate) navigator.vibrate([30,40,80]);
+});
+socket.on('roundOver',d=>{
+  showToast(d.winner===me?'💗 YOU WIN!':'💫 THEY WIN!');
+});
+socket.on('disconnect',()=>{if(me)setStatus('Connection lost. Refresh to reconnect.');});
+
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true});
+addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false});
+
+const joyEl=document.getElementById('joystick'),stick=document.getElementById('stick');
+function joyMove(e){
+  const r=joyEl.getBoundingClientRect(), cx=r.left+r.width/2, cy=r.top+r.height/2;
+  let dx=e.clientX-cx,dy=e.clientY-cy,max=48,d=Math.hypot(dx,dy);
+  if(d>max){dx=dx/d*max;dy=dy/d*max}
+  joy.x=dx/max;joy.y=dy/max;
+  stick.style.transform=`translate(${dx}px,${dy}px)`;
+}
+joyEl.addEventListener('pointerdown',e=>{joyActive=true;joyEl.setPointerCapture(e.pointerId);joyMove(e)});
+joyEl.addEventListener('pointermove',e=>{if(joyActive)joyMove(e)});
+joyEl.addEventListener('pointerup',()=>{joyActive=false;joy.x=joy.y=0;stick.style.transform='translate(0,0)'});
+joyEl.addEventListener('pointercancel',()=>{joyActive=false;joy.x=joy.y=0;stick.style.transform='translate(0,0)'});
+
+function input(){
+  let x=(keys.d||keys.arrowright?1:0)-(keys.a||keys.arrowleft?1:0)+joy.x;
+  let y=(keys.s||keys.arrowdown?1:0)-(keys.w||keys.arrowup?1:0)+joy.y;
+  const d=Math.hypot(x,y); if(d>1){x/=d;y/=d}
+  return {x,y};
+}
+setInterval(()=>{if(me&&state){const v=input();socket.emit('move',v)}},33);
+
+function draw(){
+  requestAnimationFrame(draw);
+  const W=canvas.width,H=canvas.height;
+  ctx.fillStyle='#171528';ctx.fillRect(0,0,W,H);
+  if(!state){return}
+  const arena={x:22,y:72,w:W-44,h:H-104};
+  ctx.fillStyle='#24203b';ctx.fillRect(arena.x,arena.y,arena.w,arena.h);
+  // subtle pixel grid
+  ctx.strokeStyle='#302a4b';ctx.lineWidth=1;
+  for(let x=arena.x%32;x<W;x+=32){ctx.beginPath();ctx.moveTo(x,arena.y);ctx.lineTo(x,arena.y+arena.h);ctx.stroke()}
+  for(let y=arena.y;y<H-32;y+=32){ctx.beginPath();ctx.moveTo(arena.x,y);ctx.lineTo(arena.x+arena.w,y);ctx.stroke()}
+  ctx.strokeStyle='#7c719c';ctx.lineWidth=4;ctx.strokeRect(arena.x,arena.y,arena.w,arena.h);
+
+  const players=state.players||{};
+  Object.values(players).forEach(p=>{
+    const x=arena.x+p.x*arena.w,y=arena.y+p.y*arena.h;
+    const isMe=p.id===me, chaser=p.id===state.chaser;
+    // tag radius / proximity ring
+    if(chaser){
+      ctx.beginPath();ctx.arc(x,y,28,0,Math.PI*2);
+      ctx.fillStyle='#ff6b9d22';ctx.fill();
+      ctx.strokeStyle='#ff8bb2aa';ctx.lineWidth=2;ctx.stroke();
+    }
+    // shadow
+    ctx.fillStyle='#0d0b18';ctx.fillRect(x-12,y+13,24,5);
+    // pixel body
+    ctx.fillStyle=chaser?'#ff6b9d':'#7ee787';
+    ctx.fillRect(x-11,y-14,22,25);
+    ctx.fillStyle='#ffd7bd';ctx.fillRect(x-9,y-27,18,14);
+    ctx.fillStyle='#2b2340';ctx.fillRect(x-9,y-28,18,5);
+    ctx.fillStyle='#fff';ctx.fillRect(x-6,y-22,4,4);ctx.fillRect(x+2,y-22,4,4);
+    ctx.fillStyle='#2b2340';ctx.fillRect(x-5,y-21,2,2);ctx.fillRect(x+3,y-21,2,2);
+    if(isMe){ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.strokeRect(x-16,y-32,32,54)}
+    ctx.font='bold 11px system-ui';ctx.textAlign='center';ctx.fillStyle='#fff';
+    ctx.fillText(isMe?'YOU':(chaser?'CHASE!':'RUN!'),x,y+39);
+  });
+  roleEl.textContent=state.chaser===me?'💗 YOU ARE CHASING':'🏃 YOU ARE RUNNING';
+  roundEl.textContent=`Tags: ${state.scores?.[me]||0} / 5`;
+}
+draw();
+</script>
+</body>
+</html>
